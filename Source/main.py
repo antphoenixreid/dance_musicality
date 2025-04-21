@@ -1,0 +1,20 @@
+import os, sys
+import numpy as np
+from numba import jit
+import librosa
+from matplotlib import pyplot as plt
+
+from audio_processing import Audio_Processing
+
+def main():
+    audio_file = 'E:/Engineering/Signal Processing/Personal Projects/Dance Musicality/Data/Red Bull Dance Your Style 2022/Sara/Sara_clip.mp3'
+    x, Fs = librosa.load(audio_file)
+
+    if len(x.shape) == 2:
+        x = librosa.to_mono(x)
+
+    processed_audio = Audio_Processing(x, fs=Fs)
+    processed_audio.plot_MFCC(2048, 512)
+
+if __name__ == "__main__":
+    main()
