@@ -14,7 +14,7 @@ def main():
         x = librosa.to_mono(x)
 
     processed_audio = Audio_Processing(x, fs=Fs)
-    processed_audio.plot_MFCC(2048, 512)
+    (X, X_denoised, T_coef, F_coef) = processed_audio.get_spectrogram(plot_spec=True, spec_gating=True)
 
 if __name__ == "__main__":
     main()

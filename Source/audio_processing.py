@@ -12,52 +12,92 @@ class Audio_Processing:
         self.audio = audio
         self.fs = fs
 
-    def get_spectrogram(self, plot_spec=False, spec_gating=False, N=2048, H=512, thresh=2.25):
+    def compute_spectrogram(self, mag=False, gamma=0, N=2048, H=512):
         X = librosa.stft(self.audio, pad_mode='constant', center=True)
-        X = np.log(1 + 100*np.abs(X)**2)
+        if mag:
+            X = np.abs(X)**2
+            if gamma > 0:
+                X = np.log(1 + gamma*X)
 
-        # Plot (if plot_spec=True)
-        if plot_spec:
-            T_coef = np.arange(X.shape[1])*H/self.fs
+        T_coef = np.arange(X.shape[1])*H/self.fs
 
-            K = N//2
-            F_coef = np.arange(K + 1)*self.fs/N
+        K = N//2
+        F_coef = np.arange(K + 1)*self.fs/N
 
-            plt.figure(figsize=(10, 4))
-            extent = [T_coef[0], T_coef[-1], F_coef[0], F_coef[-1]]
-            plt.imshow(X, aspect='auto', origin='lower', extent=extent)
-            plt.xlabel('Time (seconds)')
-            plt.ylabel('Frequency (Hz)')
-            plt.colorbar()
-            plt.tight_layout()
-            plt.show()
+        return (X, T_coef, F_coef)
+    
+    def f_pitch(self, p, pitch_ref=69, freq_ref=440.0):
+        return (2**((p - pitch_ref)/12)*freq_ref)
+    
+    def pool_pitch(self, p, N, pitch_ref=69, freq_ref=440.0):
+        lower = self.f_pitch(p - 0.5, pitch_ref, freq_ref)
+        upper = self.f_pitch(p + 0.5, pitch_ref, freq_ref)
 
-        # Implement Adaptive Spectral Gating (if spec_gating=True)
-        if spec_gating:
-            noise_seg = self.audio[:int(0.5*self.fs)]
-            X_noise = librosa.stft(noise_seg, pad_mode='constant', center=True)
+        k = np.arange(N//2 + 1)
+        k_freq = k*self.fs/N # F_coef(k, Fs, N)
+        mask = np.logical_and(lower <= k_freq, k_freq < upper)
 
-            # Calculate the median and standard deviation of the noise power spectrum
-            noise_median = np.median(np.abs(X_noise), axis=1)
-            noise_std = np.std(np.abs(X_noise), axis=1)
+        return k[mask]
+    
+    def compute_spec_log_freq(self, gamma=0, N=2048, H=512):
+        X, _, _ = self.compute_spectrogram(mag=True, gamma=gamma, N=N, H=H)
 
-            # Create the dynamic mask based on the noise profile statistics
-            adaptive_threshold = noise_median + thresh*noise_std
-            adaptive_threshold = median_filter(adaptive_threshold, size=3) # Smooth the threshold
+        X_LF = np.zeros((128, X.shape[1]))
+        for p in range(128):
+            k = self.pool_pitch(p, N)
+            X_LF[p, :] = X[k, :].sum(axis=0)
 
-            # Apply the adaptive threshold to the STFT
-            mask = np.abs(X) > adaptive_threshold[:, None]
-            X_denoised = X*mask
-            X_denoised = np.log(1 + 100*np.abs(X_denoised)**2)
-
-            T_coef = np.arange(X_denoised.shape[1])*H/self.fs
-
-            K = N//2
-            F_coef = np.arange(K + 1)*self.fs/N
-
-            return (X, X_denoised, T_coef, F_coef)
+        F_coef_pitch = np.arange(128)
         
-        return X
+        return X_LF, F_coef_pitch
+    
+    def compute_chromagram(self, gamma=0, N=2048, H=512):
+        X_LF, _ = self.compute_spec_log_freq(gamma=gamma, N=N, H=H)
+
+        C = np.zeros((12, X_LF.shape[1]))
+        p = np.arange(128)
+
+        for c in range(12):
+            mask = (p%2) == c
+            C[c, :] = X_LF[mask, :].sum(axis=0)
+
+        return C
+
+    def plot_spectrogram(self, X, T_coef, F_coef):
+        # Plot spectrogram
+        plt.figure(figsize=(10, 4))
+        extent = [T_coef[0], T_coef[-1], F_coef[0], F_coef[-1]]
+        plt.imshow(X, aspect='auto', origin='lower', extent=extent)
+        plt.xlabel('Time (seconds)')
+        plt.ylabel('Frequency (Hz)')
+        plt.colorbar()
+        plt.tight_layout()
+        plt.show()
+
+    def spectral_gating(self, X, N=2048, H=512, thresh=2.25):
+        # Implement Adaptive Spectral Gating (if spec_gating=True)
+        noise_seg = self.audio[:int(0.5*self.fs)]
+        X_noise = librosa.stft(noise_seg, pad_mode='constant', center=True)
+
+        # Calculate the median and standard deviation of the noise power spectrum
+        noise_median = np.median(np.abs(X_noise), axis=1)
+        noise_std = np.std(np.abs(X_noise), axis=1)
+
+        # Create the dynamic mask based on the noise profile statistics
+        adaptive_threshold = noise_median + thresh*noise_std
+        adaptive_threshold = median_filter(adaptive_threshold, size=3) # Smooth the threshold
+
+        # Apply the adaptive threshold to the STFT
+        mask = np.abs(X) > adaptive_threshold[:, None]
+        X_denoised = X*mask
+        X_denoised = np.log(1 + 100*np.abs(X_denoised)**2)
+
+        T_coef = np.arange(X_denoised.shape[1])*H/self.fs
+
+        K = N//2
+        F_coef = np.arange(K + 1)*self.fs/N
+
+        return (X_denoised, T_coef, F_coef)
 
     # @jit(nopython=True)
     def get_MFCC(self, N, H):
