@@ -62,6 +62,9 @@ class Audio_Processing:
             C[c, :] = X_LF[mask, :].sum(axis=0)
 
         return C
+    
+    def compute_MFCC(self, N=2048, H=512):
+        return librosa.feature.mfcc(y=self.audio, sr=self.fs, hop_length=H, n_fft=N)
 
     def plot_spectrogram(self, X, T_coef, F_coef):
         # Plot spectrogram

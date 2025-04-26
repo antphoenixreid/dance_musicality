@@ -7,14 +7,16 @@ from matplotlib import pyplot as plt
 from audio_processing import Audio_Processing
 
 def main():
-    audio_file = 'E:/Engineering/Signal Processing/Personal Projects/Dance Musicality/Data/Red Bull Dance Your Style 2022/Sara/Sara_clip.mp3'
+    audio_file = 'D:/Engineering/Signal Processing/Personal Projects/Dance Musicality/Data/Red Bull Dance Your Style 2022/Sara/Sara_clip.mp3'
     x, Fs = librosa.load(audio_file)
 
     if len(x.shape) == 2:
         x = librosa.to_mono(x)
 
     processed_audio = Audio_Processing(x, fs=Fs)
-    (X, X_denoised, T_coef, F_coef) = processed_audio.get_spectrogram(plot_spec=True, spec_gating=True)
+    (X, T_coef, F_coef) = processed_audio.compute_spectrogram(mag=True)
+
+    processed_audio.plot_spectrogram(X, T_coef, F_coef)
 
 if __name__ == "__main__":
     main()
