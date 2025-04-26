@@ -12,7 +12,7 @@ class Audio_Processing:
         self.audio = audio
         self.fs = fs
 
-    def compute_spectrogram(self, mag=False, gamma=0, N=2048, H=512):
+    def compute_spectrogram(self, mag=False, gamma=0, N=1024, H=512):
         X = librosa.stft(self.audio, pad_mode='constant', center=True)
         if mag:
             X = np.abs(X)**2
@@ -73,11 +73,12 @@ class Audio_Processing:
         plt.imshow(X, aspect='auto', origin='lower', extent=extent)
         plt.xlabel('Time (seconds)')
         plt.ylabel('Frequency (Hz)')
+        plt.ylim(0, 2000)
         plt.colorbar()
         plt.tight_layout()
         plt.show()
 
-    def spectral_gating(self, X, N=2048, H=512, thresh=2.25):
+    def spectral_gating(self, N=2048, H=512, thresh=2.25):
         # Implement Adaptive Spectral Gating (if spec_gating=True)
         noise_seg = self.audio[:int(0.5*self.fs)]
         X_noise = librosa.stft(noise_seg, pad_mode='constant', center=True)
@@ -91,6 +92,7 @@ class Audio_Processing:
         adaptive_threshold = median_filter(adaptive_threshold, size=3) # Smooth the threshold
 
         # Apply the adaptive threshold to the STFT
+        X, _, _ = self.compute_spectrogram()
         mask = np.abs(X) > adaptive_threshold[:, None]
         X_denoised = X*mask
         X_denoised = np.log(1 + 100*np.abs(X_denoised)**2)
