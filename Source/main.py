@@ -18,8 +18,10 @@ def main():
 
     # processed_audio.plot_spectrogram(X, T_coef, F_coef)
 
-    (X_denoised, T_coef, F_coef) = processed_audio.spectral_gating(thresh=1.5)
-    processed_audio.plot_spectrogram(X_denoised, T_coef, F_coef)
+    # (X_denoised, T_coef, F_coef) = processed_audio.spectral_gating(thresh=1.5)
+    # processed_audio.plot_spectrogram(X_denoised, T_coef, F_coef)
+
+    processed_audio.visualize_feature()
 
 if __name__ == "__main__":
     main()
