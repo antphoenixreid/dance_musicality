@@ -3,26 +3,62 @@ import numpy as np
 from numba import jit
 import librosa
 from matplotlib import pyplot as plt
-from scipy.signal import stft, istft, find_peaks
+from scipy.signal import stft, istft, find_peaks, get_window
 from scipy.ndimage import median_filter
 from scipy import ndimage, fftpack
 
 class Audio_Processing:
-    def __init__(self, audio, fs=22050):
+    # Set the Initial Variables (audio, Sample Frequency, Number of FFT, and Hopsize)
+    def __init__(self, audio, fs=22050, N=1024, H=512, spec_gate=False, thresh=2.0):
         self.audio = audio
         self.fs = fs
+        self.N = N
+        self.H = H
 
-    def compute_spectrogram(self, mag=False, gamma=0, N=1024, H=512):
-        X = librosa.stft(self.audio, pad_mode='constant', center=True)
+        # (optional) Apply Spectral Gating
+        if spec_gate:
+            self.audio = self.spectral_gating(thresh=thresh)
+
+    # Internal STFT
+    def __stft(self, win_func='hann'):
+        # Zero-padding if signal is shorter than one frame
+        if len(self.audio) < self.N:
+            audio = np.pad(self.audio, (0, self.N - len(self.audio)), mode='constant')
+
+        # Total number of frames
+        num_frames = 1 + (len(audio) - self.N)//self.H
+        
+        # Prepare Window
+        window = get_window(win_func, self.N)
+
+        # Allocate STFT Matrix
+        stft_matrix = np.empty((self.N//2 + 1, num_frames), dtype=np.complex64)
+
+        # Compute STFT
+        for i in range(num_frames):
+            start = i*self.H
+            frame = audio[start:start + self.N]
+            windowed = frame*window
+            spectrum = np.fft.rfft(windowed)
+            stft_matrix[:, i] = spectrum
+
+        # Frequency and Time Axes
+        F_coef = np.fft.rfftfreq(self.N, d=1/self.fs)
+        T_coef = np.arange(num_frames)*self.H/self.fs
+
+        return stft_matrix, F_coef, T_coef
+
+    def compute_spectrogram(self, mag=False, gamma=0):
+        X, _, _ = self._stft()
         if mag:
             X = np.abs(X)**2
             if gamma > 0:
                 X = np.log(1 + gamma*X)
 
-        T_coef = np.arange(X.shape[1])*H/self.fs
+        T_coef = np.arange(X.shape[1])*self.H/self.fs
 
-        K = N//2
-        F_coef = np.arange(K + 1)*self.fs/N
+        K = self.N//2
+        F_coef = np.arange(K + 1)*self.fs/self.N
 
         return (X, T_coef, F_coef)
     
@@ -39,20 +75,20 @@ class Audio_Processing:
 
         return k[mask]
     
-    def compute_spec_log_freq(self, gamma=0, N=1024, H=512):
-        X, _, _ = self.compute_spectrogram(mag=True, gamma=gamma, N=N, H=H)
+    def compute_spec_log_freq(self, gamma=100):
+        X, _, _ = self.compute_spectrogram(mag=True, gamma=gamma)
 
         X_LF = np.zeros((128, X.shape[1]))
         for p in range(128):
-            k = self.pool_pitch(p, N)
+            k = self.pool_pitch(p, self.N)
             X_LF[p, :] = X[k, :].sum(axis=0)
 
         F_coef_pitch = np.arange(128)
         
         return X_LF, F_coef_pitch
     
-    def compute_chromagram(self, gamma=0, N=1024, H=512):
-        X_LF, _ = self.compute_spec_log_freq(gamma=gamma, N=N, H=H)
+    def compute_chromagram(self, gamma=100):
+        X_LF, _ = self.compute_spec_log_freq(gamma=gamma)
 
         C = np.zeros((12, X_LF.shape[1]))
         p = np.arange(128)
@@ -93,7 +129,7 @@ class Audio_Processing:
 
         return fbank
     
-    def compute_MFCC(self, N=1024, H=512, num_mfcc=13, num_filters=26, f_min=0, f_max=None):
+    def compute_MFCC(self, num_mfcc=13, num_filters=26, f_min=0, f_max=None):
         if f_max is None:
             f_max = self.fs/2
 
@@ -101,19 +137,19 @@ class Audio_Processing:
         emphasized_audio = np.append(self.audio[0], self.audio[1:] - 0.97*self.audio[:-1])
 
         # Framing
-        num_frames = 1 + int((len(emphasized_audio) - N)/H)
-        frames = np.zeros((num_frames, N))
+        num_frames = 1 + int((len(emphasized_audio) - self.N)/self.H)
+        frames = np.zeros((num_frames, self.N))
 
         for i in range(num_frames):
-            start = i*H
-            frames[i] = emphasized_audio[start:start + N]
+            start = i*self.H
+            frames[i] = emphasized_audio[start:start + self.N]
 
         # Windowing
-        frames *= np.hamming(N)
+        frames *= np.hamming(self.N)
 
         # Fourier Transform and Power Spectrum
-        mag_frames = np.abs(np.fft.rfft(frames, N)) # Magnitude of FFT
-        pow_frames = (mag_frames**2)/N # Power Spectrum
+        mag_frames = np.abs(np.fft.rfft(frames, self.N)) # Magnitude of FFT
+        pow_frames = (mag_frames**2)/self.N # Power Spectrum
 
         # Mel Filter Bank
         mel_filters = self.get_mel_filterbank(num_filters, N=N, f_min=f_min, f_max=f_max)
@@ -127,10 +163,10 @@ class Audio_Processing:
 
         return mfccs.T
     
-    def onset_peak(self, N=1024, H=512):
+    def onset_peak(self):
         frames = []
-        for i in range(0, len(self.audio) - N, H):
-            frame = self.audio[i:i + N]
+        for i in range(0, len(self.audio) - self.N, self.H):
+            frame = self.audio[i:i + self.N]
             energy = np.sum(frame**2)
             frames.append(energy)
 
@@ -140,72 +176,42 @@ class Audio_Processing:
 
         return onset_env
 
-        # plt.plot(np.arange(len(energy_diff))*H/self.fs, energy, label='Energy Change')
-        # plt.plot(times, energy_diff[peaks], 'rx', label='Detected Onsets')
-        # plt.title('Onset Detection (Energy-Based)')
-        # plt.xlabel('Time (s)')
-        # plt.ylabel('Energy Change')
-        # plt.legend()
-        # plt.show()
+    def compute_tempogram(self, min_bpm=30, max_bpm=300):
+        # Get Onset Envelope
+        onset_envelope = self.onset_peak()
+        
+        # Paramters
+        win_size = 384
+        half_window = win_size//2
 
-    def plot_spectrogram(self, X, T_coef, F_coef):
-        # Plot spectrogram
-        plt.figure(figsize=(10, 4))
-        extent = [T_coef[0], T_coef[-1], F_coef[0], F_coef[-1]]
-        plt.imshow(X, aspect='auto', origin='lower', extent=extent)
-        plt.xlabel('Time (seconds)')
-        plt.ylabel('Frequency (Hz)')
-        plt.ylim(0, 2000)
-        plt.colorbar()
-        plt.tight_layout()
-        plt.show()
+        # Pad Onset Envelope
+        onset_padded = np.pad(onset_envelope, (half_window, half_window), mode='constant')
 
-    def visualize_feature(self, gamma=100, N=1024, H=512):
-        # Onset Detection
-        onset_env = self.onset_peak(N=N, H=H)
-        time_onset = np.arange(len(onset_env))*H/self.fs
+        # Setup BPM Envelope
+        max_lag = int((60/min_bpm)*self.fs/self.H)
+        min_lag = int((60/max_bpm)*self.fs/self.H)
+        tempo_axis = 60*self.fs/(self.H*np.arange(min_lag, max_lag))
 
-        # Chroma
-        C = self.compute_chromagram(gamma=gamma, N=N, H=H)
-        frames_chroma = np.arange(C.shape[1])
-        time_chroma = frames_chroma*H/self.fs
+        tempogram = []
 
-        # MFCC
-        MFCC = self.compute_MFCC(N=N, H=H)
-        frames_mfcc = np.arange(MFCC.shape[1])
-        time_mfcc = frames_mfcc*H/self.fs
+        for i in range(half_window, len(onset_padded) - half_window):
+            frame = onset_padded[i - half_window:i + half_window]
+            ac = np.correlation(frame, frame, mode='full')
+            ac = ac[ac.size//2:] # Keep only positive lags
+            ac = ac[min_lag:max_lag] # Keep BPM relevant lags
 
-        # Set up the plot figure
-        plt.figure(figsize=(15, 10))
+            if np.max(ac) > 0:
+                ac = ac/np.max(ac) # Normalize
+            tempogram.append(ac)
 
-        # MFCCs
-        plt.subplot(3, 1, 1)
-        plt.imshow(MFCC, aspect='auto', origin='lower', extent=[time_mfcc.min(), time_mfcc.max(), 0, MFCC.shape[0]])
-        plt.colorbar()
-        plt.title('MFCCs over Time')
-        plt.ylabel('MFCC Coefficients')
+        tempogram = np.array(tempogram).T # (lag x time frames)
 
-        # Chroma
-        plt.subplot(3, 1, 2)
-        plt.imshow(C, aspect='auto', origin='lower', extent=[time_chroma.min(), time_chroma.max(), 0, 12])
-        plt.colorbar()
-        plt.title('Chroma Features over Time')
-        plt.ylabel('Pitch Class')
+        return tempo_axis, tempogram
 
-        # Onset Envelope
-        plt.subplot(3, 1, 3)
-        plt.plot(time_onset, onset_env)
-        plt.title('Onset Envelope (Energy Changes)')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Onset Strength')
-
-        plt.tight_layout()
-        plt.show()
-
-    def spectral_gating(self, N=1024, H=512, thresh=2.25):
+    def spectral_gating(self, thresh=2.25):
         # Implement Adaptive Spectral Gating (if spec_gating=True)
         noise_seg = self.audio[:int(0.5*self.fs)]
-        X_noise = librosa.stft(noise_seg, pad_mode='constant', center=True)
+        X_noise = self.stft(noise_seg, pad_mode='constant', center=True)
 
         # Calculate the median and standard deviation of the noise power spectrum
         noise_median = np.median(np.abs(X_noise), axis=1)
@@ -221,30 +227,11 @@ class Audio_Processing:
         X_denoised = X*mask
         X_denoised = np.log(1 + 100*np.abs(X_denoised)**2)
 
-        T_coef = np.arange(X_denoised.shape[1])*H/self.fs
+        T_coef = np.arange(X_denoised.shape[1])*self.H/self.fs
 
-        K = N//2
-        F_coef = np.arange(K + 1)*self.fs/N
+        K = self.N//2
+        F_coef = np.arange(K + 1)*self.fs/self.N
 
-        return (X_denoised, T_coef, F_coef)
+        cleaned_audio = istft(X_denoised)
 
-    # @jit(nopython=True)
-    def get_MFCC(self, N=1024, H=512):
-        mfccs = librosa.feature.mfcc(y=self.audio, sr=self.fs, n_mfcc=N)
-        t = librosa.frames_to_time(np.arange(mfccs.shape[1]), sr=self.fs, hop_length=H)
-
-        return mfccs, t
-    
-    # @jit(nopython=True)
-    def plot_MFCC(self, N=1024, H=512):
-        mfccs, t = self.get_MFCC(N, H)
-
-        plt.figure(figsize=(10, 4))
-        librosa.display.specshow(mfccs, sr=self.fs, x_axis='time', y_axis='linear', cmap='viridis')
-        plt.xlabel('Time (s)')
-        plt.ylabel('MFCC Coefficients')
-        plt.title('MFCC Spectrogram')
-        plt.ylim(0, 1200)
-        plt.colorbar(format='%+2.0f dB')
-        plt.tight_layout()
-        plt.show()
+        return cleaned_audio
